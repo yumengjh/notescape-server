@@ -21,7 +21,10 @@
     "typeorm": "typeorm-ts-node-commonjs",
     "typeorm:migration:generate": "npm run typeorm -- migration:generate",
     "typeorm:migration:run": "npm run typeorm -- migration:run",
-    "typeorm:migration:revert": "npm run typeorm -- migration:revert"
+    "typeorm:migration:revert": "npm run typeorm -- migration:revert",
+    "docs:dev": "cd docs/website && vitepress dev",
+    "docs:build": "cd docs/website && vitepress build",
+    "docs:preview": "cd docs/website && vitepress preview"
   },
   "dependencies": {
     "@nestjs/cache-manager": "^2.1.1",
@@ -78,7 +81,9 @@
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.7.3",
-    "typescript-eslint": "^8.20.0"
+    "typescript-eslint": "^8.20.0",
+    "vitepress": "^1.6.4",
+    "vue": "^3.5.26"
   },
   "jest": {
     "moduleFileExtensions": [

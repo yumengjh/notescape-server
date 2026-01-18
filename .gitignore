@@ -16,3 +16,5 @@ dist-ssr
 
 # 上传文件目录
 uploads/
+
+cache/
