@@ -550,20 +550,28 @@ export class DocumentsService {
     // 确定要使用的版本号
     const docVer = version || document.head;
 
-    // 获取根块的版本
-    const rootBlockVersion = await this.blockVersionRepository.findOne({
-      where: {
-        blockId: document.rootBlockId,
-        ver: docVer,
-      },
+    // 检查文档版本是否存在
+    const revision = await this.docRevisionRepository.findOne({
+      where: { docId, docVer },
     });
 
-    if (!rootBlockVersion) {
+    if (!revision) {
       throw new NotFoundException('文档版本不存在');
     }
 
-    // 构建渲染树（简化版，实际应该递归加载所有子块）
-    const tree = await this.buildBlockTree(document.rootBlockId, docVer);
+    // 获取该文档版本对应的块版本映射
+    const blockVersionMap = await this.getBlockVersionMapForVersion(docId, docVer);
+
+    // 根据块版本映射构建完整的内容树
+    const tree = await this.buildContentTreeFromVersionMap(
+      docId,
+      document.rootBlockId,
+      blockVersionMap,
+    );
+
+    if (!tree) {
+      throw new NotFoundException('文档版本不存在');
+    }
 
     return {
       docId: document.docId,
