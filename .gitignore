@@ -13,3 +13,6 @@ dist-ssr
 *.local
 
 .env
+
+# 上传文件目录
+uploads/

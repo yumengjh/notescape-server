@@ -8,6 +8,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { WorkspacesModule } from './modules/workspaces/workspaces.module';
 import { DocumentsModule } from './modules/documents/documents.module';
 import { BlocksModule } from './modules/blocks/blocks.module';
+import { AssetsModule } from './modules/assets/assets.module';
 
 // 导入所有实体
 import { User } from './entities/user.entity';
@@ -73,6 +74,7 @@ import { Session } from './entities/session.entity';
     WorkspacesModule,
     DocumentsModule,
     BlocksModule,
+    AssetsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
