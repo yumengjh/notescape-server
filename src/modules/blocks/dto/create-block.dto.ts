@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsObject, IsNumber, Min } from 'class-validator';
+import { IsString, IsOptional, IsObject, IsNumber, Min, IsBoolean } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateBlockDto {
@@ -33,4 +33,13 @@ export class CreateBlockDto {
   @ApiPropertyOptional({ description: '是否折叠', example: false, default: false })
   @IsOptional()
   collapsed?: boolean;
+
+  @ApiPropertyOptional({
+    description: '是否立即创建文档版本',
+    example: true,
+    default: true,
+  })
+  @IsOptional()
+  @IsBoolean()
+  createVersion?: boolean;
 }

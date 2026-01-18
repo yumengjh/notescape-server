@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BlocksController } from './blocks.controller';
 import { BlocksService } from './blocks.service';
@@ -12,7 +12,7 @@ import { ActivitiesModule } from '../activities/activities.module';
 @Module({
   imports: [
     TypeOrmModule.forFeature([Block, BlockVersion, Document, DocRevision]),
-    DocumentsModule,
+    forwardRef(() => DocumentsModule), // 使用 forwardRef 解决循环依赖
     ActivitiesModule,
   ],
   controllers: [BlocksController],

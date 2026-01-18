@@ -501,6 +501,9 @@ app/
 - [安全与日志设计](./SAFE_DESIGN.md) - 安全机制、日志、审计、限流
 - [安全机制说明](./SECURITY.md) - 当前已实现的安全机制说明
 - [用户行为 E2E 测试说明](./E2E_USER_JOURNEY.md) - user-journey.e2e-spec 运行方式、架构与接口清单
+- [文档操作流程指南](./DOCUMENT_WORKFLOW.md) - 从注册到创建文档、块的完整操作流程与接口顺序
+- [批量块操作 API 文档](./BATCH_BLOCKS_API.md) - 批量块操作接口的详细使用说明
+- [文档版本控制 API 文档](./VERSION_CONTROL_API.md) - 延迟版本创建和手动触发机制说明
 - [待办事项](./TODO.md) - 功能实现清单
 - [设置文档](./SETUP.md) - 环境配置说明
 

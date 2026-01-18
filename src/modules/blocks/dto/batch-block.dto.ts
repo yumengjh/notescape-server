@@ -1,4 +1,4 @@
-import { IsArray, IsEnum, ValidateNested, IsOptional, IsString, IsNumber } from 'class-validator';
+import { IsArray, IsEnum, ValidateNested, IsOptional, IsString, IsNumber, IsBoolean } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { CreateBlockDto } from './create-block.dto';
@@ -108,4 +108,13 @@ export class BatchBlockDto {
     keepDiscriminatorProperty: true,
   })
   operations: BatchOperation[];
+
+  @ApiPropertyOptional({
+    description: '是否立即创建文档版本',
+    example: true,
+    default: true,
+  })
+  @IsOptional()
+  @IsBoolean()
+  createVersion?: boolean;
 }

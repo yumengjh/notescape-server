@@ -13,6 +13,7 @@ import { BlockVersion } from '../../entities/block-version.entity';
 import { DocRevision } from '../../entities/doc-revision.entity';
 import { DocSnapshot } from '../../entities/doc-snapshot.entity';
 import { WorkspacesService } from '../workspaces/workspaces.service';
+import { VersionControlService } from './services/version-control.service';
 import { generateDocId, generateBlockId, generateVersionId } from '../../common/utils/id-generator.util';
 import { CreateDocumentDto } from './dto/create-document.dto';
 import { UpdateDocumentDto } from './dto/update-document.dto';
@@ -28,6 +29,7 @@ export class DocumentsService {
   constructor(
     @InjectRepository(Document)
     private documentRepository: Repository<Document>,
+    private versionControlService: VersionControlService,
     @InjectRepository(Block)
     private blockRepository: Repository<Block>,
     @InjectRepository(BlockVersion)
@@ -781,6 +783,49 @@ export class DocumentsService {
       blockVersionMap,
     });
     return await this.docSnapshotRepository.save(snapshot);
+  }
+
+  /**
+   * 手动触发创建文档版本（提交待创建的版本）
+   */
+  async commitVersion(docId: string, message: string | undefined, userId: string) {
+    const document = await this.findOne(docId, userId);
+    await this.checkDocumentEditPermission(document, userId);
+
+    // 获取待创建版本的数量
+    const pendingCount = this.versionControlService.getPendingVersionCount(docId);
+
+    if (pendingCount === 0) {
+      throw new BadRequestException('没有待创建的版本，无需提交');
+    }
+
+    // 创建版本
+    const newVersion = await this.versionControlService.createVersion(
+      docId,
+      userId,
+      message,
+    );
+
+    return {
+      docId,
+      version: newVersion,
+      pendingOperations: pendingCount,
+      message: message || `提交 ${pendingCount} 个待处理操作`,
+    };
+  }
+
+  /**
+   * 获取文档待创建版本的数量
+   */
+  async getPendingVersions(docId: string, userId: string) {
+    const document = await this.findOne(docId, userId);
+    const pendingCount = this.versionControlService.getPendingVersionCount(docId);
+
+    return {
+      docId,
+      pendingCount,
+      hasPending: pendingCount > 0,
+    };
   }
 
   /**

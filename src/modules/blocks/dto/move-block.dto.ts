@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsNumber, Min } from 'class-validator';
+import { IsString, IsOptional, IsNumber, Min, IsBoolean } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class MoveBlockDto {
@@ -15,4 +15,13 @@ export class MoveBlockDto {
   @IsNumber()
   @Min(0)
   indent?: number;
+
+  @ApiPropertyOptional({
+    description: '是否立即创建文档版本',
+    example: true,
+    default: true,
+  })
+  @IsOptional()
+  @IsBoolean()
+  createVersion?: boolean;
 }

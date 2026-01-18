@@ -1,4 +1,4 @@
-import { IsObject, IsOptional, IsString, IsNumber, Min } from 'class-validator';
+import { IsObject, IsOptional, IsString, IsNumber, Min, IsBoolean } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class UpdateBlockDto {
@@ -10,4 +10,13 @@ export class UpdateBlockDto {
   @IsOptional()
   @IsString()
   plainText?: string;
+
+  @ApiPropertyOptional({
+    description: '是否立即创建文档版本',
+    example: true,
+    default: true,
+  })
+  @IsOptional()
+  @IsBoolean()
+  createVersion?: boolean;
 }

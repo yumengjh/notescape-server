@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { DocumentsController } from './documents.controller';
 import { DocumentsService } from './documents.service';
+import { VersionControlService } from './services/version-control.service';
 import { Document } from '../../entities/document.entity';
 import { Block } from '../../entities/block.entity';
 import { BlockVersion } from '../../entities/block-version.entity';
@@ -17,7 +18,7 @@ import { ActivitiesModule } from '../activities/activities.module';
     ActivitiesModule,
   ],
   controllers: [DocumentsController],
-  providers: [DocumentsService],
-  exports: [DocumentsService],
+  providers: [DocumentsService, VersionControlService],
+  exports: [DocumentsService, VersionControlService],
 })
 export class DocumentsModule {}

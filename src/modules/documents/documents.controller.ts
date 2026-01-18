@@ -27,6 +27,7 @@ import { QueryRevisionsDto } from './dto/query-revisions.dto';
 import { DiffVersionsDto } from './dto/diff-versions.dto';
 import { RevertVersionDto } from './dto/revert-version.dto';
 import { SearchQueryDto } from './dto/search-query.dto';
+import { CommitVersionDto } from './dto/commit-version.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { AuditLog } from '../../common/decorators/audit-log.decorator';
@@ -215,5 +216,34 @@ export class DocumentsController {
     @CurrentUser() user: any,
   ) {
     return this.documentsService.createSnapshot(docId, user.userId);
+  }
+
+  @Post(':docId/commit')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: '手动触发创建文档版本' })
+  @ApiParam({ name: 'docId', description: '文档ID' })
+  @ApiResponse({ status: 200, description: '版本创建成功' })
+  @ApiResponse({ status: 400, description: '没有待创建的版本' })
+  @ApiResponse({ status: 404, description: '文档不存在' })
+  @ApiResponse({ status: 403, description: '没有权限' })
+  async commitVersion(
+    @Param('docId') docId: string,
+    @Body() commitDto: CommitVersionDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.documentsService.commitVersion(docId, commitDto.message, user.userId);
+  }
+
+  @Get(':docId/pending-versions')
+  @ApiOperation({ summary: '获取文档待创建版本的数量' })
+  @ApiParam({ name: 'docId', description: '文档ID' })
+  @ApiResponse({ status: 200, description: '获取成功' })
+  @ApiResponse({ status: 404, description: '文档不存在' })
+  @ApiResponse({ status: 403, description: '没有权限' })
+  async getPendingVersions(
+    @Param('docId') docId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.documentsService.getPendingVersions(docId, user.userId);
   }
 }

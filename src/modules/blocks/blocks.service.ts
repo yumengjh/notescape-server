@@ -3,6 +3,8 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { InjectDataSource } from '@nestjs/typeorm';
@@ -12,6 +14,7 @@ import { BlockVersion } from '../../entities/block-version.entity';
 import { Document } from '../../entities/document.entity';
 import { DocRevision } from '../../entities/doc-revision.entity';
 import { DocumentsService } from '../documents/documents.service';
+import { VersionControlService } from '../documents/services/version-control.service';
 import { generateBlockId, generateVersionId } from '../../common/utils/id-generator.util';
 import { CreateBlockDto } from './dto/create-block.dto';
 import { UpdateBlockDto } from './dto/update-block.dto';
@@ -28,6 +31,8 @@ export class BlocksService {
     private blockRepository: Repository<Block>,
     @InjectRepository(BlockVersion)
     private blockVersionRepository: Repository<BlockVersion>,
+    @Inject(forwardRef(() => VersionControlService))
+    private versionControlService: VersionControlService,
     @InjectRepository(Document)
     private documentRepository: Repository<Document>,
     @InjectDataSource()
@@ -99,8 +104,12 @@ export class BlocksService {
 
       await manager.save(BlockVersion, blockVersion);
 
-      // 更新文档版本号
-      await this.incrementDocumentHead(createBlockDto.docId, userId, manager);
+      // 根据 createVersion 参数决定是否立即创建文档版本
+      const shouldCreateVersion = createBlockDto.createVersion !== false; // 默认为 true
+      if (shouldCreateVersion) {
+        await this.incrementDocumentHead(createBlockDto.docId, userId, manager);
+      }
+      // 如果 shouldCreateVersion 为 false，在事务外记录待创建版本
 
       return {
         blockId,
@@ -110,6 +119,11 @@ export class BlocksService {
         payload: createBlockDto.payload,
       };
     });
+
+    // 事务成功后，如果 createVersion 为 false，记录待创建版本
+    if (createBlockDto.createVersion === false) {
+      this.versionControlService.recordPendingVersion(createBlockDto.docId);
+    }
     const doc = await this.documentRepository.findOne({ where: { docId: createBlockDto.docId }, select: ['workspaceId'] });
     if (doc) await this.activitiesService.record(doc.workspaceId, BLOCK_ACTIONS.CREATE, 'block', result.blockId, userId, { docId: createBlockDto.docId, type: createBlockDto.type });
     return result;
@@ -181,8 +195,12 @@ export class BlocksService {
       block.latestBy = userId;
       await manager.save(Block, block);
 
-      // 更新文档版本号
-      await this.incrementDocumentHead(block.docId, userId, manager);
+      // 根据 createVersion 参数决定是否立即创建文档版本
+      const shouldCreateVersion = updateBlockDto.createVersion !== false; // 默认为 true
+      if (shouldCreateVersion) {
+        await this.incrementDocumentHead(block.docId, userId, manager);
+      }
+      // 如果 shouldCreateVersion 为 false，在事务外记录待创建版本
 
       return {
         blockId,
@@ -190,6 +208,11 @@ export class BlocksService {
         payload: updateBlockDto.payload,
       };
     });
+
+    // 事务成功后，如果 createVersion 为 false，记录待创建版本
+    if (updateBlockDto.createVersion === false) {
+      this.versionControlService.recordPendingVersion(block.docId);
+    }
     const doc = await this.documentRepository.findOne({ where: { docId: block.docId }, select: ['workspaceId'] });
     if (doc) await this.activitiesService.record(doc.workspaceId, BLOCK_ACTIONS.UPDATE, 'block', blockId, userId, { docId: block.docId });
     return result;
@@ -338,8 +361,12 @@ export class BlocksService {
       block.latestBy = userId;
       await manager.save(Block, block);
 
-      // 更新文档版本号
-      await this.incrementDocumentHead(block.docId, userId, manager);
+      // 根据 createVersion 参数决定是否立即创建文档版本
+      const shouldCreateVersion = moveBlockDto.createVersion !== false; // 默认为 true
+      if (shouldCreateVersion) {
+        await this.incrementDocumentHead(block.docId, userId, manager);
+      }
+      // 如果 shouldCreateVersion 为 false，在事务外记录待创建版本
 
       return {
         blockId,
@@ -348,6 +375,11 @@ export class BlocksService {
         sortKey: moveBlockDto.sortKey,
       };
     });
+
+    // 事务成功后，如果 createVersion 为 false，记录待创建版本
+    if (moveBlockDto.createVersion === false) {
+      this.versionControlService.recordPendingVersion(block.docId);
+    }
     const doc = await this.documentRepository.findOne({ where: { docId: block.docId }, select: ['workspaceId'] });
     if (doc) await this.activitiesService.record(doc.workspaceId, BLOCK_ACTIONS.MOVE, 'block', blockId, userId, { docId: block.docId, parentId: moveBlockDto.parentId });
     return result;
@@ -378,7 +410,7 @@ export class BlocksService {
       block.deletedBy = userId;
       await manager.save(Block, block);
 
-      // 更新文档版本号
+      // 删除操作默认立即创建版本（重要操作）
       await this.incrementDocumentHead(block.docId, userId, manager);
 
       return { message: '块已删除' };
@@ -498,8 +530,12 @@ export class BlocksService {
         }
       }
 
-      // 更新文档版本号
-      await this.incrementDocumentHead(batchBlockDto.docId, userId, manager);
+      // 根据 createVersion 参数决定是否立即创建文档版本
+      const shouldCreateVersion = batchBlockDto.createVersion !== false; // 默认为 true
+      if (shouldCreateVersion) {
+        await this.incrementDocumentHead(batchBlockDto.docId, userId, manager);
+      }
+      // 如果 shouldCreateVersion 为 false，在事务外记录待创建版本
 
       return {
         total: batchBlockDto.operations.length,
@@ -508,6 +544,11 @@ export class BlocksService {
         results,
       };
     });
+
+    // 事务成功后，如果 createVersion 为 false，记录待创建版本
+    if (batchBlockDto.createVersion === false) {
+      this.versionControlService.recordPendingVersion(batchBlockDto.docId);
+    }
     const doc = await this.documentRepository.findOne({ where: { docId: batchBlockDto.docId }, select: ['workspaceId'] });
     if (doc) await this.activitiesService.record(doc.workspaceId, BLOCK_ACTIONS.BATCH, 'block', batchBlockDto.docId, userId, { count: batchBlockDto.operations.length });
     return result;

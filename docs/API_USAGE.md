@@ -4,9 +4,15 @@
 
 - [基础信息](#基础信息)
 - [认证流程](#认证流程)
-- [API 接口](#api-接口)
+- [完整 API 接口一览](#完整-api-接口一览)
+- [业务接口说明](#业务接口说明)
 - [错误处理](#错误处理)
 - [示例代码](#示例代码)
+- [Swagger 与相关文档](#swagger-与相关文档)
+- [最佳实践](#最佳实践)
+- [常见问题](#常见问题)
+- [更新日志](#更新日志)
+- [技术支持](#技术支持)
 
 ---
 
@@ -27,36 +33,35 @@ http://localhost:5200/api/v1/auth/register
 
 ### 响应格式
 
-所有 API 响应都遵循统一格式：
+由 `TransformInterceptor` 统一包装，所有成功响应为：
 
 **成功响应：**
 ```json
 {
   "success": true,
-  "data": {
-    // 响应数据
-  },
-  "meta": {
-    // 可选：分页信息等
-  }
+  "data": { }
 }
 ```
 
-**错误响应：**
+- `data`：业务数据。列表类接口通常为 `{ items, total, page, pageSize }`。
+
+**错误响应：**（由 `HttpExceptionFilter` 处理）
 ```json
 {
   "success": false,
   "error": {
     "code": "ERROR_CODE",
-    "message": "错误描述信息",
-    "details": {}
+    "message": "错误描述"
   }
 }
 ```
 
+- `message` 可能为字符串或字符串数组（如 class-validator 多条校验结果）。
+- 开发环境下 `error` 中可能包含 `stack`。
+
 ### 认证方式
 
-大部分接口需要 JWT Token 认证，在请求头中添加：
+除注册、登录、刷新令牌外，其余接口均需 JWT，请求头：
 
 ```
 Authorization: Bearer <your-access-token>
@@ -210,51 +215,280 @@ Authorization: Bearer <your-access-token>
 
 ---
 
-## API 接口
+## 完整 API 接口一览
 
-### 认证相关接口
+除特别说明外，路径均以 `/api/v1` 为前缀，需认证接口需加 `Authorization: Bearer <accessToken>`。
 
-| 方法 | 路径 | 说明 | 需要认证 |
-|------|------|------|---------|
-| POST | `/auth/register` | 用户注册 | ❌ |
-| POST | `/auth/login` | 用户登录 | ❌ |
-| POST | `/auth/refresh` | 刷新令牌 | ❌ |
-| POST | `/auth/logout` | 用户登出 | ✅ |
-| GET | `/auth/me` | 获取当前用户 | ✅ |
+### 认证 (auth)
+
+| 方法 | 路径 | 说明 | 认证 |
+|------|------|------|------|
+| POST | `/auth/register` | 用户注册 | 否 |
+| POST | `/auth/login` | 用户登录 | 否 |
+| POST | `/auth/refresh` | 刷新令牌 | 否 |
+| POST | `/auth/logout` | 用户登出 | 是 |
+| GET | `/auth/me` | 获取当前用户 | 是 |
+
+### 工作空间 (workspaces)
+
+| 方法 | 路径 | 说明 | 认证 |
+|------|------|------|------|
+| POST | `/workspaces` | 创建工作空间 | 是 |
+| GET | `/workspaces` | 工作空间列表（分页：page, pageSize） | 是 |
+| GET | `/workspaces/:workspaceId` | 工作空间详情 | 是 |
+| PATCH | `/workspaces/:workspaceId` | 更新工作空间 | 是 |
+| DELETE | `/workspaces/:workspaceId` | 删除工作空间（软删除） | 是 |
+| POST | `/workspaces/:workspaceId/members` | 邀请成员 | 是 |
+| GET | `/workspaces/:workspaceId/members` | 成员列表 | 是 |
+| PATCH | `/workspaces/:workspaceId/members/:userId` | 更新成员角色 | 是 |
+| DELETE | `/workspaces/:workspaceId/members/:userId` | 移除成员 | 是 |
+
+### 文档 (documents)
+
+| 方法 | 路径 | 说明 | 认证 |
+|------|------|------|------|
+| POST | `/documents` | 创建文档 | 是 |
+| GET | `/documents` | 文档列表（workspaceId, status, visibility, parentId, tags, category, sortBy, sortOrder, page, pageSize） | 是 |
+| GET | `/documents/search` | 搜索文档（query 必填；workspaceId, status, tags, 分页） | 是 |
+| GET | `/documents/:docId` | 文档详情 | 是 |
+| GET | `/documents/:docId/content` | 文档内容/渲染树（?version） | 是 |
+| PATCH | `/documents/:docId` | 更新文档元数据 | 是 |
+| POST | `/documents/:docId/publish` | 发布文档 | 是 |
+| POST | `/documents/:docId/move` | 移动文档 | 是 |
+| DELETE | `/documents/:docId` | 删除文档（软删除） | 是 |
+| GET | `/documents/:docId/revisions` | 修订历史 | 是 |
+| GET | `/documents/:docId/diff` | 版本对比 | 是 |
+| POST | `/documents/:docId/revert` | 回滚到指定版本 | 是 |
+| POST | `/documents/:docId/snapshots` | 创建快照 | 是 |
+
+### 块 (blocks)
+
+| 方法 | 路径 | 说明 | 认证 |
+|------|------|------|------|
+| POST | `/blocks` | 创建块 | 是 |
+| PATCH | `/blocks/:blockId/content` | 更新块内容 | 是 |
+| POST | `/blocks/:blockId/move` | 移动块 | 是 |
+| DELETE | `/blocks/:blockId` | 删除块（软删除） | 是 |
+| GET | `/blocks/:blockId/versions` | 块版本历史（分页） | 是 |
+| POST | `/blocks/batch` | 批量操作（create/update/delete/move） | 是 |
+
+### 标签 (tags)
+
+| 方法 | 路径 | 说明 | 认证 |
+|------|------|------|------|
+| POST | `/tags` | 创建标签 | 是 |
+| GET | `/tags` | 标签列表（workspaceId 必填，分页） | 是 |
+| GET | `/tags/:tagId` | 标签详情 | 是 |
+| GET | `/tags/:tagId/usage` | 标签使用统计 | 是 |
+| PATCH | `/tags/:tagId` | 更新标签 | 是 |
+| DELETE | `/tags/:tagId` | 删除标签 | 是 |
+
+### 收藏 (favorites)
+
+| 方法 | 路径 | 说明 | 认证 |
+|------|------|------|------|
+| POST | `/favorites` | 添加收藏（Body: docId） | 是 |
+| GET | `/favorites` | 收藏列表（分页） | 是 |
+| DELETE | `/favorites/:docId` | 取消收藏 | 是 |
+
+### 评论 (comments)
+
+| 方法 | 路径 | 说明 | 认证 |
+|------|------|------|------|
+| POST | `/comments` | 创建评论（docId, content；可选 blockId, mentions, parentCommentId） | 是 |
+| GET | `/comments` | 评论列表（docId 必填，可选 blockId，分页） | 是 |
+| GET | `/comments/:commentId` | 评论详情 | 是 |
+| PATCH | `/comments/:commentId` | 更新评论（仅本人） | 是 |
+| DELETE | `/comments/:commentId` | 删除评论（软删除，仅本人） | 是 |
+
+### 搜索 (search)
+
+| 方法 | 路径 | 说明 | 认证 |
+|------|------|------|------|
+| GET | `/search` | 全局搜索（query 必填；workspaceId, type=doc\|block\|all, 分页） | 是 |
+| POST | `/search/advanced` | 高级搜索（query, workspaceId, tags, startDate, endDate, createdBy, sortBy, sortOrder, 分页） | 是 |
+
+### 活动日志 (activities)
+
+| 方法 | 路径 | 说明 | 认证 |
+|------|------|------|------|
+| GET | `/activities` | 活动列表（workspaceId 必填；userId, action, entityType, startDate, endDate, 分页） | 是 |
+
+### 资产 (assets)
+
+| 方法 | 路径 | 说明 | 认证 |
+|------|------|------|------|
+| POST | `/assets/upload` | 上传文件（multipart: workspaceId, file；默认 ≤10MB） | 是 |
+| GET | `/assets` | 资产列表（workspaceId 必填，分页） | 是 |
+| GET | `/assets/:assetId/file` | 下载/预览文件流 | 是 |
+| DELETE | `/assets/:assetId` | 删除资产 | 是 |
+
+### 安全 (security)
+
+| 方法 | 路径 | 说明 | 认证 |
+|------|------|------|------|
+| GET | `/security/events` | 安全日志（eventType, userId, ip, startDate, endDate, 分页） | 是 |
+| GET | `/security/audit` | 审计日志（userId, action, resourceType, resourceId, startDate, endDate, 分页） | 是 |
 
 ### Token 说明
 
-- **Access Token**: 用于访问受保护的接口，默认有效期 24 小时
-- **Refresh Token**: 用于刷新 Access Token，默认有效期 7 天
-- Token 存储在响应中的 `accessToken` 和 `refreshToken` 字段
+- **Access Token**：访问受保护接口，默认约 24 小时有效。
+- **Refresh Token**：刷新 Access Token，默认约 7 天有效。
+- 登录/注册返回 `data.accessToken`、`data.refreshToken`；刷新接口返回新的双 Token。
+
+---
+
+## 业务接口说明
+
+### 工作空间
+
+- **创建** `POST /workspaces`  
+  Body: `{ name, description?, icon? }`  
+  返回：`workspaceId`、`name`、`userRole` 等；创建者自动为 owner。
+
+- **列表** `GET /workspaces`  
+  Query: `page`, `pageSize`（默认 1, 20）。  
+  返回：`{ items, total, page, pageSize }`，每项含 `userRole`。
+
+- **邀请成员** `POST /workspaces/:workspaceId/members`  
+  Body: `{ email, role }`（role: admin | editor | viewer）。需当前用户为 owner 或 admin。
+
+### 文档
+
+- **创建** `POST /documents`  
+  Body: `{ workspaceId, title, icon?, cover?, visibility?, parentId?, tags?, category? }`。  
+  返回：`docId`、`rootBlockId`、`title` 等；同时创建根块。
+
+- **列表** `GET /documents`  
+  Query: `workspaceId`（可选，不传则查有权限的所有空间）、`status`、`visibility`、`parentId`、`tags`、`category`、`sortBy`、`sortOrder`、`page`、`pageSize`。
+
+- **搜索文档** `GET /documents/search`  
+  Query: `query`（必填）、`workspaceId?`、`status?`（draft/normal/archived）、`tags?`、`page`、`pageSize`。按文档标题与 searchVector 全文检索。
+
+- **内容** `GET /documents/:docId/content`  
+  Query: `version`（可选，默认最新）。返回 `{ docId, docVer, title, tree }`。
+
+- **发布** `POST /documents/:docId/publish`  
+  将 `publishedHead` 置为当前 `head`。
+
+- **移动** `POST /documents/:docId/move`  
+  Body: `{ parentId?, sortOrder? }`。
+
+### 块
+
+- **创建** `POST /blocks`  
+  Body: `{ docId, type, payload, parentId?, sortKey?, indent?, collapsed? }`。  
+  返回：`blockId`、`docId`、`type`、`version`、`payload`。
+
+- **更新内容** `PATCH /blocks/:blockId/content`  
+  Body: `{ payload, plainText? }`。
+
+- **移动** `POST /blocks/:blockId/move`  
+  Body: `{ parentId, sortKey, indent? }`。
+
+- **批量** `POST /blocks/batch`  
+  Body: `{ docId, operations }`。`operations` 元素按 `type` 区分：
+  - `create`: `{ type: 'create', data: CreateBlockDto }`
+  - `update`: `{ type: 'update', blockId, data: UpdateBlockDto }`
+  - `delete`: `{ type: 'delete', blockId }`
+  - `move`: `{ type: 'move', blockId, parentId, sortKey, indent? }`
+
+### 标签
+
+- **创建** `POST /tags`  
+  Body: `{ workspaceId, name, color? }`。同一工作空间下 `name` 不可重复。
+
+- **列表** `GET /tags`  
+  Query: `workspaceId`（必填）、`page`、`pageSize`。
+
+### 收藏
+
+- **添加** `POST /favorites`  
+  Body: `{ docId }`。同一用户同一文档不可重复收藏。
+
+- **列表** `GET /favorites`  
+  Query: `page`、`pageSize`。返回带 `document` 的收藏项，已删除文档会过滤。
+
+### 评论
+
+- **创建** `POST /comments`  
+  Body: `{ docId, content, blockId?, mentions?, parentCommentId? }`。
+
+- **列表** `GET /comments`  
+  Query: `docId`（必填）、`blockId?`、`page`、`pageSize`。
+
+### 搜索
+
+- **全局** `GET /search`  
+  Query: `query`（必填）、`workspaceId?`、`type?`（doc/block/all，默认 all）、`page`、`pageSize`。  
+  返回：文档与块的匹配结果（结构见 Swagger）。
+
+- **高级** `POST /search/advanced`  
+  Body: `query`、`workspaceId?`、`type?`、`tags?`、`startDate?`、`endDate?`、`createdBy?`、`sortBy?`（rank/updatedAt/createdAt）、`sortOrder?`、`page`、`pageSize`。
+
+### 活动日志
+
+- **列表** `GET /activities`  
+  Query: `workspaceId`（必填）、`userId?`、`action?`、`entityType?`、`startDate?`、`endDate?`、`page`、`pageSize`。  
+  需具备该工作空间访问权限。
+
+### 资产
+
+- **上传** `POST /assets/upload`  
+  `Content-Type: multipart/form-data`，字段：`workspaceId`、`file`。默认限制 10MB，可在配置调整。
+
+- **文件** `GET /assets/:assetId/file`  
+  返回文件流，`Content-Disposition: inline` 可预览。
+
+### 安全与审计
+
+- **安全日志** `GET /security/events`  
+  Query: `eventType`、`userId`、`ip`、`startDate`、`endDate`、`page`、`pageSize`。通常需管理员权限。
+
+- **审计日志** `GET /security/audit`  
+  Query: `userId`、`action`、`resourceType`、`resourceId`、`startDate`、`endDate`、`page`、`pageSize`。
 
 ---
 
 ## 错误处理
 
-### 常见错误码
+### 错误响应结构
 
-| 错误码 | HTTP 状态码 | 说明 |
-|--------|------------|------|
-| `VALIDATION_ERROR` | 400 | 请求参数验证失败 |
-| `UNAUTHORIZED` | 401 | 未授权，Token 无效或过期 |
-| `AUTH_FAILED` | 401 | 认证失败，用户名或密码错误 |
-| `TOKEN_EXPIRED` | 401 | Token 已过期 |
-| `TOKEN_INVALID` | 401 | Token 无效 |
-| `ACCESS_DENIED` | 403 | 访问被拒绝，权限不足 |
-| `NOT_FOUND` | 404 | 资源不存在 |
-| `ALREADY_EXISTS` | 409 | 资源已存在（如用户名或邮箱已注册） |
-| `INTERNAL_ERROR` | 500 | 服务器内部错误 |
-
-### 错误响应示例
-
-**验证错误：**
 ```json
 {
   "success": false,
   "error": {
-    "code": "VALIDATION_ERROR",
-    "message": "用户名只能包含字母、数字和下划线; 密码至少8位"
+    "code": "string",
+    "message": "string | string[]"
+  }
+}
+```
+
+- `code`：来自 `HttpException` 的 `response.code` 或异常名（如 `BadRequestException`）；业务错误常用 `src/common/errors/error-codes.ts` 中 `ErrorCode` 枚举值。
+- `message`：`class-validator` 校验失败时可能为字符串数组；其余多为字符串。
+- 开发环境下 `error` 可能包含 `stack`。
+
+### 常见错误码与 HTTP 状态
+
+| 含义 | HTTP | 典型 code / 说明 |
+|------|------|------------------|
+| 参数校验失败 | 400 | `BadRequestException` 或 `VAL_4001`；`message` 常为数组 |
+| 未授权 / Token 无效或过期 | 401 | `AUTH_1002`、`AUTH_1003`、`AUTH_1004`；登录失败为 `AUTH_1001` |
+| 权限不足 | 403 | `PERM_2001`、`ForbiddenException` |
+| 资源不存在 | 404 | `NotFoundException`、`RES_3001` |
+| 资源已存在 / 冲突 | 409 | `ConflictException`、`RES_3002` |
+| 全局限流 | 429 | `RATE_6001`、`RATE_6002`（@nestjs/throttler） |
+| 服务器错误 | 500 | `INTERNAL_ERROR`、`SYS_9001` |
+
+### 错误响应示例
+
+**校验错误（message 可能为数组）：**
+```json
+{
+  "success": false,
+  "error": {
+    "code": "BadRequestException",
+    "message": ["用户名只能包含字母、数字和下划线", "密码至少8位"]
   }
 }
 ```
@@ -264,30 +498,19 @@ Authorization: Bearer <your-access-token>
 {
   "success": false,
   "error": {
-    "code": "AUTH_FAILED",
+    "code": "AUTH_1001",
     "message": "用户名或密码错误"
   }
 }
 ```
 
-**资源已存在：**
+**资源不存在：**
 ```json
 {
   "success": false,
   "error": {
-    "code": "ALREADY_EXISTS",
-    "message": "用户名或邮箱已存在"
-  }
-}
-```
-
-**Token 过期：**
-```json
-{
-  "success": false,
-  "error": {
-    "code": "TOKEN_EXPIRED",
-    "message": "Token 已过期，请使用 Refresh Token 刷新"
+    "code": "NotFoundException",
+    "message": "文档不存在"
   }
 }
 ```
@@ -416,61 +639,70 @@ async function refreshToken() {
 ```typescript
 async function apiRequest(url: string, options: RequestInit = {}) {
   let token = localStorage.getItem('accessToken');
-  
-  // 添加认证头
-  const headers = {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(token && { 'Authorization': `Bearer ${token}` }),
-    ...options.headers,
+    ...(options.headers as Record<string, string>),
   };
 
-  let response = await fetch(url, {
-    ...options,
-    headers,
-  });
+  let response = await fetch(url, { ...options, headers });
 
-  // 如果 Token 过期，尝试刷新
   if (response.status === 401) {
     const refreshToken = localStorage.getItem('refreshToken');
     if (refreshToken) {
       const refreshResponse = await fetch('http://localhost:5200/api/v1/auth/refresh', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refreshToken }),
       });
-
       const refreshData = await refreshResponse.json();
-      
       if (refreshData.success) {
-        // 更新 token 并重试请求
         localStorage.setItem('accessToken', refreshData.data.accessToken);
         localStorage.setItem('refreshToken', refreshData.data.refreshToken);
-        
         headers['Authorization'] = `Bearer ${refreshData.data.accessToken}`;
-        response = await fetch(url, {
-          ...options,
-          headers,
-        });
+        response = await fetch(url, { ...options, headers });
       } else {
-        // 刷新失败，需要重新登录
         localStorage.removeItem('accessToken');
         localStorage.removeItem('refreshToken');
         throw new Error('请重新登录');
       }
     }
   }
-
   return response.json();
 }
+```
 
-// 使用示例
-async function example() {
-  const data = await apiRequest('http://localhost:5200/api/v1/auth/me', {
-    method: 'GET',
-  });
-  console.log(data);
+#### 业务接口示例：创建工作空间与文档
+
+```typescript
+// 需先登录并取得 accessToken
+async function createWorkspaceAndDoc(accessToken: string) {
+  const base = 'http://localhost:5200/api/v1';
+  const headers = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${accessToken}`,
+  };
+
+  const ws = await fetch(`${base}/workspaces`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ name: '我的空间', description: '示例', icon: '📁' }),
+  }).then(r => r.json());
+  if (!ws.success) throw new Error(ws.error?.message || '创建工作空间失败');
+  const workspaceId = ws.data.workspaceId;
+
+  const doc = await fetch(`${base}/documents`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      workspaceId,
+      title: '第一篇文档',
+      visibility: 'workspace',
+      tags: ['示例'],
+    }),
+  }).then(r => r.json());
+  if (!doc.success) throw new Error(doc.error?.message || '创建文档失败');
+  return { workspaceId, docId: doc.data.docId, rootBlockId: doc.data.rootBlockId };
 }
 ```
 
@@ -512,9 +744,16 @@ curl -X GET http://localhost:5200/api/v1/auth/me \
 ```bash
 curl -X POST http://localhost:5200/api/v1/auth/refresh \
   -H "Content-Type: application/json" \
-  -d '{
-    "refreshToken": "YOUR_REFRESH_TOKEN"
-  }'
+  -d '{"refreshToken": "YOUR_REFRESH_TOKEN"}'
+```
+
+#### 创建工作空间（需先登录取得 ACCESS_TOKEN）
+
+```bash
+curl -X POST http://localhost:5200/api/v1/workspaces \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ACCESS_TOKEN" \
+  -d '{"name": "我的空间", "description": "示例", "icon": "📁"}'
 ```
 
 ### Axios 示例
@@ -589,19 +828,24 @@ async function getCurrentUser() {
 
 ---
 
-## Swagger API 文档
+## Swagger 与相关文档
 
-启动应用后，可以访问 Swagger 交互式 API 文档：
+### Swagger
+
+启动应用后访问：
 
 ```
 http://localhost:5200/api/docs
 ```
 
-在 Swagger 文档中，你可以：
-- 查看所有可用的 API 接口
-- 查看请求/响应格式
-- 直接在浏览器中测试 API
-- 查看数据模型定义
+可查看全部接口、请求/响应 Schema、并在浏览器中调试。
+
+### 相关文档
+
+- [API 设计文档](./API_DESIGN.md) — 接口与数据结构详细设计
+- [用户行为 E2E 测试说明](./E2E_USER_JOURNEY.md) — 串联调用示例与运行方式
+- [设置文档](./SETUP.md) — 环境与数据库配置
+- [安全机制说明](./SECURITY.md) — 认证、限流、审计等
 
 ---
 
@@ -627,10 +871,10 @@ http://localhost:5200/api/docs
 
 ### 4. 安全性
 
-- 使用 HTTPS 传输（生产环境）
-- 不要在日志中记录 Token
+- 生产环境使用 HTTPS
+- 不在日志或前端存储中暴露 Token
 - 定期更新密码
-- 实现请求频率限制
+- 服务端已启用全局限流（@nestjs/throttler，可配置），客户端可对 429 做重试或提示
 
 ---
 
@@ -638,40 +882,49 @@ http://localhost:5200/api/docs
 
 ### Q: Token 过期后怎么办？
 
-A: 使用 Refresh Token 调用 `/auth/refresh` 接口获取新的 Access Token。
+A: 用 Refresh Token 调 `POST /auth/refresh` 获取新的 Access Token 与 Refresh Token。
 
 ### Q: 如何判断 Token 是否过期？
 
-A: 当 API 返回 401 状态码和 `TOKEN_EXPIRED` 错误码时，表示 Token 已过期。
+A: 接口返回 401 且 `error.code` 为 `AUTH_1002`、`AUTH_1003`、`AUTH_1004` 等时，可视为需刷新或重新登录。
 
 ### Q: Refresh Token 也会过期吗？
 
-A: 是的，Refresh Token 默认有效期为 7 天。过期后需要重新登录。
+A: 会，默认约 7 天，过期后需重新登录。
 
-### Q: 可以同时有多个有效的 Token 吗？
+### Q: 可以同时有多个有效 Token 吗？
 
-A: 可以，系统支持多设备登录，每个设备都有独立的会话。
+A: 可以，多设备/多会话各自独立；登出时 Body 传 `{ token: accessToken }` 仅销毁当前会话。
 
-### Q: 如何登出所有设备？
+### Q: 收到 429 是什么原因？
 
-A: 目前需要逐个设备登出。未来版本可能会添加"登出所有设备"功能。
+A: 触发了全局限流（如 60 秒内超过 100 次请求），可稍后重试或联系管理员调整配置。
+
+### Q: 文档、块、工作空间等 ID 的格式？
+
+A: 均为服务端生成的字符串，如 `doc_`、`b_`、`ws_`、`u_` 等前缀，见 `src/common/utils/id-generator.util.ts`。
 
 ---
 
 ## 更新日志
 
-### v1.0.0 (2024-01-17)
-- ✅ 用户注册接口
-- ✅ 用户登录接口
-- ✅ Token 刷新接口
-- ✅ 获取当前用户接口
-- ✅ 用户登出接口
+### 2026-01
+- 认证：注册、登录、刷新、登出、当前用户
+- 工作空间：CRUD、成员邀请/列表/改角色/移除
+- 文档：CRUD、列表、搜索、内容、发布、移动、修订、diff、回滚、快照
+- 块：创建、更新内容、移动、删除、版本历史、批量
+- 标签：CRUD、列表、使用统计
+- 收藏：添加、列表、取消
+- 评论：CRUD、列表（按文档/块）
+- 搜索：全局搜索、高级搜索
+- 活动日志：按工作空间查询
+- 资产：上传、列表、文件流、删除
+- 安全：安全日志、审计日志
+- 全局限流、统一响应格式、HttpExceptionFilter、Swagger
 
 ---
 
 ## 技术支持
 
-如有问题，请查看：
-- Swagger 文档: http://localhost:5200/api/docs
-- 项目 README: [README.md](./README.md)
-- 安装指南: [INSTALL.md](./INSTALL.md)
+- Swagger: http://localhost:5200/api/docs  
+- [API 设计](./API_DESIGN.md) · [E2E 测试说明](./E2E_USER_JOURNEY.md) · [设置](./SETUP.md) · [安装](./INSTALL.md)
