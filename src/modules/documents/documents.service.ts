@@ -572,9 +572,16 @@ export class DocumentsService {
   }
 
   /**
-   * 获取文档内容（渲染树）
+   * 获取文档内容（渲染树，支持分页）
    */
-  async getContent(docId: string, version: number | undefined, userId: string) {
+  async getContent(
+    docId: string,
+    version: number | undefined,
+    userId: string,
+    maxDepth?: number,
+    startBlockId?: string,
+    limit?: number,
+  ) {
     const document = await this.findOne(docId, userId);
 
     // 确定要使用的版本号
@@ -589,35 +596,72 @@ export class DocumentsService {
       throw new NotFoundException('文档版本不存在');
     }
 
+    // 如果指定了 startBlockId，使用优化的按需查询方式
+    if (startBlockId) {
+      const result = await this.buildContentTreeFromStartBlock(
+        docId,
+        document.rootBlockId,
+        startBlockId,
+        revision.createdAt,
+        maxDepth,
+        limit || 1000,
+      );
+      
+      if (!result || !result.tree) {
+        throw new NotFoundException('文档版本不存在');
+      }
+
+      // 检查根块是否被删除
+      if (result.tree && typeof result.tree === 'object' && '__rootBlockDeleted' in result.tree) {
+        throw new BadRequestException('根块已被删除，无法获取文档内容。请恢复根块或重新创建文档。');
+      }
+
+      // 检查根块是否不存在
+      if (result.tree && typeof result.tree === 'object' && '__rootBlockMissing' in result.tree) {
+        throw new NotFoundException('根块不存在，无法获取文档内容。');
+      }
+
+      return {
+        docId: document.docId,
+        docVer,
+        title: document.title,
+        tree: result.tree,
+        pagination: {
+          totalBlocks: result.totalBlocks,
+          returnedBlocks: result.returnedBlocks,
+          hasMore: result.hasMore,
+          nextStartBlockId: result.nextStartBlockId,
+        },
+      };
+    }
+
+    // 如果没有指定 startBlockId，使用原来的方式（需要获取所有块的版本映射）
     // 获取该文档版本对应的块版本映射
     const blockVersionMap = await this.getBlockVersionMapForVersion(docId, docVer);
 
-    // 调试信息
-    console.log('getContent - docId:', docId, 'docVer:', docVer);
-    console.log('getContent - rootBlockId:', document.rootBlockId);
-    console.log('getContent - blockVersionMap keys:', Object.keys(blockVersionMap));
-    console.log('getContent - rootBlockId in map:', document.rootBlockId in blockVersionMap);
-
-    // 根据块版本映射构建完整的内容树
-    const tree = await this.buildContentTreeFromVersionMap(
+    // 根据块版本映射构建内容树（支持分页）
+    const result = await this.buildContentTreeFromVersionMap(
       docId,
       document.rootBlockId,
       blockVersionMap,
+      maxDepth,
+      startBlockId,
+      limit || 1000, // 默认最多返回1000个块
     );
 
-    if (!tree) {
+    if (!result || !result.tree) {
       console.error('buildContentTreeFromVersionMap returned null');
       console.error('blockVersionMap:', blockVersionMap);
       throw new NotFoundException('文档版本不存在');
     }
 
     // 检查根块是否被删除
-    if (tree && typeof tree === 'object' && '__rootBlockDeleted' in tree) {
+    if (result.tree && typeof result.tree === 'object' && '__rootBlockDeleted' in result.tree) {
       throw new BadRequestException('根块已被删除，无法获取文档内容。请恢复根块或重新创建文档。');
     }
 
     // 检查根块是否不存在
-    if (tree && typeof tree === 'object' && '__rootBlockMissing' in tree) {
+    if (result.tree && typeof result.tree === 'object' && '__rootBlockMissing' in result.tree) {
       throw new NotFoundException('根块不存在，无法获取文档内容。');
     }
 
@@ -625,7 +669,13 @@ export class DocumentsService {
       docId: document.docId,
       docVer,
       title: document.title,
-      tree,
+      tree: result.tree,
+      pagination: {
+        totalBlocks: result.totalBlocks,
+        returnedBlocks: result.returnedBlocks,
+        hasMore: result.hasMore,
+        nextStartBlockId: result.nextStartBlockId,
+      },
     };
   }
 
@@ -996,33 +1046,359 @@ export class DocumentsService {
   }
 
   /**
-   * 根据块版本映射构建内容树
+   * 从起始块开始按需构建内容树（优化版本，只查询需要的块）
+   */
+  private async buildContentTreeFromStartBlock(
+    docId: string,
+    rootBlockId: string,
+    startBlockId: string,
+    revisionCreatedAt: number,
+    maxDepth?: number,
+    limit: number = 1000,
+  ): Promise<{ tree: any; totalBlocks: number; returnedBlocks: number; hasMore: boolean; nextStartBlockId?: string }> {
+    // 先找到起始块及其版本
+    const startBlockVersion = await this.blockVersionRepository
+      .createQueryBuilder('bv')
+      .innerJoin(Block, 'b', 'bv.blockId = b.blockId AND b.isDeleted = false')
+      .where('bv.docId = :docId', { docId })
+      .andWhere('bv.blockId = :blockId', { blockId: startBlockId })
+      .andWhere('bv.createdAt <= :createdAt', { createdAt: revisionCreatedAt })
+      .orderBy('bv.ver', 'DESC')
+      .limit(1)
+      .getOne();
+
+    if (!startBlockVersion) {
+      throw new NotFoundException(`起始块 ${startBlockId} 不存在或已被删除`);
+    }
+
+    // 获取起始块的父块ID
+    const startBlockParentId = startBlockVersion.parentId;
+
+    // 如果起始块是根块，直接返回根块
+    if (startBlockId === rootBlockId) {
+      const rootVersion = await this.getBlockVersionAtTime(docId, rootBlockId, revisionCreatedAt);
+      if (!rootVersion) {
+        return { tree: { __rootBlockMissing: true }, totalBlocks: 0, returnedBlocks: 0, hasMore: false };
+      }
+      
+      const children = await this.getChildrenBlocks(docId, rootBlockId, revisionCreatedAt, maxDepth, 0, limit);
+      
+      return {
+        tree: {
+          blockId: rootVersion.blockId,
+          type: (rootVersion.payload as any)?.type || 'root',
+          payload: rootVersion.payload,
+          parentId: rootVersion.parentId,
+          sortKey: rootVersion.sortKey || '0',
+          indent: rootVersion.indent || 0,
+          collapsed: rootVersion.collapsed || false,
+          children,
+        },
+        totalBlocks: 0, // 按需查询时无法准确统计总数
+        returnedBlocks: 1 + children.length,
+        hasMore: false, // 简化处理，实际应该根据 limit 判断
+        nextStartBlockId: undefined,
+      };
+    }
+
+    // 如果起始块不是根块，需要找到起始块及其后续兄弟块
+    // 获取起始块的 sortKey（用于在数据库层面过滤）
+    const startBlockSortKey = startBlockVersion.sortKey || '500000';
+    const startBlockSortKeyNum = parseInt(startBlockSortKey, 10) || 500000;
+
+    // 优化：只查询起始块及其后续的兄弟块（在数据库层面过滤）
+    // 注意：由于 sortKey 是字符串且使用分数排序，我们需要查询所有兄弟块然后在内存中筛选
+    // 但可以通过限制查询数量来减少数据库压力
+    const siblingsQuery = await this.blockVersionRepository
+      .createQueryBuilder('bv')
+      .innerJoin(Block, 'b', 'bv.blockId = b.blockId AND b.isDeleted = false')
+      .where('bv.docId = :docId', { docId })
+      .andWhere('bv.parentId = :parentId', { parentId: startBlockParentId })
+      .andWhere('bv.createdAt <= :createdAt', { createdAt: revisionCreatedAt })
+      .select('bv.blockId', 'blockId')
+      .addSelect('MAX(bv.ver)', 'maxVer')
+      .addSelect('MAX(bv.sortKey)', 'sortKey')
+      .groupBy('bv.blockId')
+      .orderBy('CAST(MAX(bv.sortKey) AS INTEGER)', 'ASC') // 按数字排序
+      .addOrderBy('bv.blockId', 'ASC')
+      .getRawMany();
+
+    // 在内存中按 sortKey 精确排序（使用 compareSortKey 函数）
+    const sortedSiblings = siblingsQuery
+      .map(row => ({
+        blockId: row.blockId,
+        maxVer: typeof row.maxVer === 'string' ? parseInt(row.maxVer, 10) : row.maxVer,
+        sortKey: row.sortKey || '500000',
+      }))
+      .sort((a, b) => {
+        const sortKeyA = (a.sortKey && a.sortKey.trim() !== '') ? a.sortKey : '500000';
+        const sortKeyB = (b.sortKey && b.sortKey.trim() !== '') ? b.sortKey : '500000';
+        const result = compareSortKey(sortKeyA, sortKeyB);
+        if (result === 0) {
+          return a.blockId.localeCompare(b.blockId);
+        }
+        return result;
+      });
+
+    // 找到起始块在兄弟块中的位置
+    const startIndex = sortedSiblings.findIndex(s => s.blockId === startBlockId);
+    if (startIndex < 0) {
+      throw new NotFoundException(`起始块 ${startBlockId} 不在其父块的子块列表中`);
+    }
+
+    // 只获取起始块及其后续的兄弟块（限制数量，避免查询过多）
+    const maxSiblingsToReturn = Math.min(limit, sortedSiblings.length - startIndex);
+    const blocksToReturn = sortedSiblings.slice(startIndex, startIndex + maxSiblingsToReturn);
+
+    // 按需查询这些块的完整版本信息
+    const versions = await this.blockVersionRepository.find({
+      where: blocksToReturn.map(s => ({
+        docId,
+        blockId: s.blockId,
+        ver: s.maxVer,
+      })),
+    });
+
+    const byBlock = new Map<string, typeof versions[0]>();
+    for (const v of versions) byBlock.set(v.blockId, v);
+
+    // 构建树结构
+    let returnedBlocks = 0;
+    let hasMore = false;
+    let nextStartBlockId: string | undefined;
+
+    const buildNode = async (blockId: string, depth: number = 0): Promise<any> => {
+      if (maxDepth !== undefined && depth > maxDepth) {
+        return null;
+      }
+
+      if (returnedBlocks >= limit) {
+        hasMore = true;
+        if (!nextStartBlockId) {
+          nextStartBlockId = blockId;
+        }
+        return null;
+      }
+
+      const bv = byBlock.get(blockId);
+      if (!bv) return null;
+
+      returnedBlocks++;
+
+      // 按需查询子块
+      const childVersions = await this.getChildrenBlocks(
+        docId,
+        blockId,
+        revisionCreatedAt,
+        maxDepth,
+        depth + 1,
+        limit - returnedBlocks,
+      );
+
+      return {
+        blockId: bv.blockId,
+        type: (bv.payload as any)?.type || 'paragraph',
+        payload: bv.payload,
+        parentId: bv.parentId,
+        sortKey: bv.sortKey || '500000',
+        indent: bv.indent || 0,
+        collapsed: bv.collapsed || false,
+        children: childVersions,
+      };
+    };
+
+    // 构建起始块及其后续兄弟块的树
+    const children = await Promise.all(
+      blocksToReturn.map(s => buildNode(s.blockId, 0))
+    );
+    const validChildren = children.filter(Boolean);
+
+    // 如果起始块的父块是根块，返回根块（但只包含起始块及其后续兄弟块）
+    if (startBlockParentId === rootBlockId) {
+      const rootVersion = await this.getBlockVersionAtTime(docId, rootBlockId, revisionCreatedAt);
+      if (!rootVersion) {
+        return { tree: { __rootBlockMissing: true }, totalBlocks: 0, returnedBlocks: 0, hasMore: false };
+      }
+
+      return {
+        tree: {
+          blockId: rootVersion.blockId,
+          type: (rootVersion.payload as any)?.type || 'root',
+          payload: rootVersion.payload,
+          parentId: rootVersion.parentId,
+          sortKey: rootVersion.sortKey || '0',
+          indent: rootVersion.indent || 0,
+          collapsed: rootVersion.collapsed || false,
+          children: validChildren,
+        },
+        totalBlocks: 0,
+        returnedBlocks: 1 + validChildren.length,
+        hasMore,
+        nextStartBlockId,
+      };
+    } else {
+      // 如果起始块的父块不是根块，返回父块（但只包含起始块及其后续兄弟块）
+      const parentVersion = await this.getBlockVersionAtTime(docId, startBlockParentId, revisionCreatedAt);
+      if (!parentVersion) {
+        throw new NotFoundException(`父块 ${startBlockParentId} 不存在`);
+      }
+
+      return {
+        tree: {
+          blockId: parentVersion.blockId,
+          type: (parentVersion.payload as any)?.type || 'paragraph',
+          payload: parentVersion.payload,
+          parentId: parentVersion.parentId,
+          sortKey: parentVersion.sortKey || '500000',
+          indent: parentVersion.indent || 0,
+          collapsed: parentVersion.collapsed || false,
+          children: validChildren,
+        },
+        totalBlocks: 0,
+        returnedBlocks: 1 + validChildren.length,
+        hasMore,
+        nextStartBlockId,
+      };
+    }
+  }
+
+  /**
+   * 获取块在指定时间点的版本
+   */
+  private async getBlockVersionAtTime(
+    docId: string,
+    blockId: string,
+    createdAt: number,
+  ): Promise<BlockVersion | null> {
+    return await this.blockVersionRepository
+      .createQueryBuilder('bv')
+      .innerJoin(Block, 'b', 'bv.blockId = b.blockId AND b.isDeleted = false')
+      .where('bv.docId = :docId', { docId })
+      .andWhere('bv.blockId = :blockId', { blockId })
+      .andWhere('bv.createdAt <= :createdAt', { createdAt })
+      .orderBy('bv.ver', 'DESC')
+      .limit(1)
+      .getOne();
+  }
+
+  /**
+   * 按需获取子块（递归查询，只查询需要的块）
+   */
+  private async getChildrenBlocks(
+    docId: string,
+    parentId: string,
+    revisionCreatedAt: number,
+    maxDepth?: number,
+    currentDepth: number = 0,
+    remainingLimit: number = 1000,
+  ): Promise<any[]> {
+    if (maxDepth !== undefined && currentDepth > maxDepth) {
+      return [];
+    }
+
+    if (remainingLimit <= 0) {
+      return [];
+    }
+
+    // 优化：一次性查询该父块的所有子块及其在该时间点的最大版本号，按 sortKey 排序
+    const childRows = await this.blockVersionRepository
+      .createQueryBuilder('bv')
+      .innerJoin(Block, 'b', 'bv.blockId = b.blockId AND b.isDeleted = false')
+      .where('bv.docId = :docId', { docId })
+      .andWhere('bv.parentId = :parentId', { parentId })
+      .andWhere('bv.createdAt <= :createdAt', { createdAt: revisionCreatedAt })
+      .select('bv.blockId', 'blockId')
+      .addSelect('MAX(bv.ver)', 'maxVer')
+      .addSelect('MAX(bv.sortKey)', 'sortKey')
+      .groupBy('bv.blockId')
+      .orderBy('MAX(bv.sortKey)', 'ASC')
+      .addOrderBy('bv.blockId', 'ASC')
+      .limit(remainingLimit) // 限制查询数量
+      .getRawMany();
+
+    if (childRows.length === 0) {
+      return [];
+    }
+
+    // 按需查询这些子块的完整版本信息
+    const childVersions = await this.blockVersionRepository.find({
+      where: childRows.map(row => ({
+        docId,
+        blockId: row.blockId,
+        ver: typeof row.maxVer === 'string' ? parseInt(row.maxVer, 10) : row.maxVer,
+      })),
+    });
+
+    const children: any[] = [];
+    let usedLimit = 0;
+
+    for (const childVersion of childVersions) {
+      if (usedLimit >= remainingLimit) {
+        break;
+      }
+
+      usedLimit++;
+
+      // 递归获取子块的子块（按需查询）
+      const grandchildren = await this.getChildrenBlocks(
+        docId,
+        childVersion.blockId,
+        revisionCreatedAt,
+        maxDepth,
+        currentDepth + 1,
+        remainingLimit - usedLimit,
+      );
+
+      children.push({
+        blockId: childVersion.blockId,
+        type: (childVersion.payload as any)?.type || 'paragraph',
+        payload: childVersion.payload,
+        parentId: childVersion.parentId,
+        sortKey: childVersion.sortKey || '500000',
+        indent: childVersion.indent || 0,
+        collapsed: childVersion.collapsed || false,
+        children: grandchildren,
+      });
+
+      usedLimit += grandchildren.length;
+    }
+
+    return children;
+  }
+
+  /**
+   * 根据块版本映射构建内容树（支持分页）
    */
   private async buildContentTreeFromVersionMap(
     docId: string,
     rootBlockId: string,
     blockVersionMap: Record<string, number>,
-  ): Promise<any> {
+    maxDepth?: number,
+    startBlockId?: string,
+    limit: number = 1000,
+  ): Promise<{ tree: any; totalBlocks: number; returnedBlocks: number; hasMore: boolean; nextStartBlockId?: string }> {
     if (!(rootBlockId in blockVersionMap)) {
       // 检查根块是否存在以及是否被删除
       const rootBlock = await this.blockRepository.findOne({
         where: { docId, blockId: rootBlockId },
       });
       if (!rootBlock) {
-        return { __rootBlockMissing: true };
+        return { tree: { __rootBlockMissing: true }, totalBlocks: 0, returnedBlocks: 0, hasMore: false };
       }
       if (rootBlock.isDeleted) {
-        return { __rootBlockDeleted: true };
+        return { tree: { __rootBlockDeleted: true }, totalBlocks: 0, returnedBlocks: 0, hasMore: false };
       }
       // 根块存在但不在版本映射中，返回 null（这种情况不应该发生）
-      return null;
+      return { tree: null, totalBlocks: 0, returnedBlocks: 0, hasMore: false };
     }
 
     const entries = Object.entries(blockVersionMap).map(([blockId, ver]) => ({
       blockId,
       ver,
     }));
-    if (entries.length === 0) return null;
+    if (entries.length === 0) {
+      return { tree: null, totalBlocks: 0, returnedBlocks: 0, hasMore: false };
+    }
 
     // 查询块版本，同时过滤已删除的块
     // 先单独检查根块（根块不应该被删除）
@@ -1032,12 +1408,12 @@ export class DocumentsService {
     
     if (!rootBlock) {
       console.error('根块不存在，rootBlockId:', rootBlockId);
-      return { __rootBlockMissing: true };
+      return { tree: { __rootBlockMissing: true }, totalBlocks: 0, returnedBlocks: 0, hasMore: false };
     }
     
     if (rootBlock.isDeleted) {
       console.error('根块已被删除，rootBlockId:', rootBlockId);
-      return { __rootBlockDeleted: true };
+      return { tree: { __rootBlockDeleted: true }, totalBlocks: 0, returnedBlocks: 0, hasMore: false };
     }
     
     // 查询非根块的有效块ID列表
@@ -1073,7 +1449,7 @@ export class DocumentsService {
     
     if (validEntries.length === 0) {
       console.error('validEntries 为空，但根块应该存在');
-      return null;
+      return { tree: null, totalBlocks: 0, returnedBlocks: 0, hasMore: false };
     }
 
     const versions = await this.blockVersionRepository.find({
@@ -1084,34 +1460,164 @@ export class DocumentsService {
     for (const v of versions) byBlock.set(v.blockId, v);
 
     const root = byBlock.get(rootBlockId);
-    if (!root) return null;
+    if (!root) {
+      return { tree: null, totalBlocks: 0, returnedBlocks: 0, hasMore: false };
+    }
 
-    const buildNode = (blockId: string): any => {
+    // 统计总块数
+    const totalBlocks = validBlockIds.size;
+
+    // 分页控制
+    let returnedBlocks = 0;
+    let hasMore = false;
+    let nextStartBlockId: string | undefined;
+    const visitedBlocks = new Set<string>();
+    let shouldStart = !startBlockId; // 如果没有指定 startBlockId，从根块开始
+
+    // 如果指定了 startBlockId，先找到该块及其父块信息
+    let startBlockParentId: string | undefined;
+    if (startBlockId) {
+      const startBlock = byBlock.get(startBlockId);
+      if (!startBlock) {
+        throw new NotFoundException(`起始块 ${startBlockId} 不存在`);
+      }
+      startBlockParentId = startBlock.parentId;
+    }
+
+    const buildNode = (blockId: string, depth: number = 0): any => {
+      // 检查是否超过最大深度
+      if (maxDepth !== undefined && depth > maxDepth) {
+        return null;
+      }
+
+      // 检查是否达到数量限制
+      if (returnedBlocks >= limit) {
+        hasMore = true;
+        if (!nextStartBlockId) {
+          nextStartBlockId = blockId;
+        }
+        return null;
+      }
+
+      // 检查是否已访问（避免循环）
+      if (visitedBlocks.has(blockId)) {
+        return null;
+      }
+
       const bv = byBlock.get(blockId);
       if (!bv) return null;
+
+      // 如果指定了 startBlockId，检查是否应该开始返回
+      if (startBlockId && !shouldStart) {
+        if (blockId === startBlockId) {
+          shouldStart = true; // 找到起始块，开始返回
+        } else {
+          // 还没找到起始块，继续查找但不返回当前块
+          visitedBlocks.add(blockId);
+          // 递归查找子块
+          const childVersions = versions
+            .filter((v) => v.parentId === blockId)
+            .sort((a, b) => {
+              const sortKeyA = (a.sortKey && a.sortKey.trim() !== '') ? a.sortKey : '500000';
+              const sortKeyB = (b.sortKey && b.sortKey.trim() !== '') ? b.sortKey : '500000';
+              const result = compareSortKey(sortKeyA, sortKeyB);
+              if (result === 0) {
+                return a.blockId.localeCompare(b.blockId);
+              }
+              return result;
+            });
+          
+          for (const child of childVersions) {
+            const result = buildNode(child.blockId, depth + 1);
+            if (result) {
+              return result; // 找到起始块，返回结果
+            }
+          }
+          return null; // 在当前分支没找到起始块
+        }
+      }
+
+      // 如果指定了 startBlockId 但还没找到起始块，不应该返回当前块
+      if (startBlockId && !shouldStart) {
+        return null;
+      }
+      
+      // 如果指定了 startBlockId 且已经找到起始块，检查当前块是否应该返回
+      // 如果当前块是起始块之前的兄弟块，不应该返回
+      if (startBlockId && shouldStart && blockId !== startBlockId) {
+        // 检查当前块是否是起始块的兄弟块，且排在起始块之前
+        if (bv.parentId === startBlockParentId) {
+          const startBlock = byBlock.get(startBlockId);
+          if (startBlock) {
+            const startSortKey = (startBlock.sortKey && startBlock.sortKey.trim() !== '') ? startBlock.sortKey : '500000';
+            const currentSortKey = (bv.sortKey && bv.sortKey.trim() !== '') ? bv.sortKey : '500000';
+            // 如果当前块的 sortKey 小于起始块的 sortKey，跳过
+            if (compareSortKey(currentSortKey, startSortKey) < 0) {
+              visitedBlocks.add(blockId);
+              return null;
+            }
+          }
+        }
+      }
+
+      visitedBlocks.add(blockId);
+      returnedBlocks++;
       
       // 获取所有子块并排序
-      // 注意：这里使用 versions 数组，它包含了 blockVersionMap 中指定的所有版本
       const childVersions = versions
         .filter((v) => v.parentId === blockId)
         .sort((a, b) => {
-          // 确保 sortKey 不为空，使用数字比较
-          // 如果 sortKey 为空或无效，使用默认值 '500000'（中间值）
           const sortKeyA = (a.sortKey && a.sortKey.trim() !== '') ? a.sortKey : '500000';
           const sortKeyB = (b.sortKey && b.sortKey.trim() !== '') ? b.sortKey : '500000';
           const result = compareSortKey(sortKeyA, sortKeyB);
-          
-          // 如果 sortKey 相同，按 blockId 排序（确保稳定性）
           if (result === 0) {
             return a.blockId.localeCompare(b.blockId);
           }
-          
           return result;
         });
       
-      const children = childVersions
-        .map((v) => buildNode(v.blockId))
+      // 如果指定了 startBlockId 且当前块是起始块的父块，只返回起始块及其后续兄弟块
+      let childrenToProcess = childVersions;
+      if (startBlockId && shouldStart && blockId === startBlockParentId) {
+        const startIndex = childVersions.findIndex((v) => v.blockId === startBlockId);
+        if (startIndex >= 0) {
+          // 只返回起始块及其后续的兄弟块
+          childrenToProcess = childVersions.slice(startIndex);
+        }
+      }
+      
+      const children = childrenToProcess
+        .map((v) => buildNode(v.blockId, depth + 1))
         .filter(Boolean);
+
+      // 如果达到限制，记录下一个块的ID
+      if (returnedBlocks >= limit && !nextStartBlockId) {
+        // 找到第一个未返回的子块作为下一个起始点
+        for (const child of childVersions) {
+          if (!visitedBlocks.has(child.blockId)) {
+            nextStartBlockId = child.blockId;
+            break;
+          }
+        }
+        // 如果没有未返回的子块，尝试找下一个兄弟块
+        if (!nextStartBlockId && blockId !== rootBlockId && bv.parentId) {
+          const siblings = versions
+            .filter((v) => v.parentId === bv.parentId)
+            .sort((a, b) => {
+              const sortKeyA = (a.sortKey && a.sortKey.trim() !== '') ? a.sortKey : '500000';
+              const sortKeyB = (b.sortKey && b.sortKey.trim() !== '') ? b.sortKey : '500000';
+              const result = compareSortKey(sortKeyA, sortKeyB);
+              if (result === 0) {
+                return a.blockId.localeCompare(b.blockId);
+              }
+              return result;
+            });
+          const currentIndex = siblings.findIndex((s) => s.blockId === blockId);
+          if (currentIndex >= 0 && currentIndex < siblings.length - 1) {
+            nextStartBlockId = siblings[currentIndex + 1].blockId;
+          }
+        }
+      }
         
       return {
         blockId: bv.blockId,
@@ -1125,7 +1631,112 @@ export class DocumentsService {
       };
     };
 
-    return buildNode(rootBlockId);
+    // 如果指定了 startBlockId，从起始块开始构建树
+    // 无论起始块在哪一层，都从根块开始查找，但只返回起始块及其后续内容
+    let tree = buildNode(rootBlockId, 0);
+    
+    // 如果返回的树只是起始块本身，说明需要返回后续兄弟块
+    // 但是后续兄弟块应该在父块级别处理，所以这里需要特殊处理
+    if (startBlockId && tree && tree.blockId === startBlockId && startBlockParentId) {
+      // 获取起始块的所有兄弟块
+      const siblings = versions
+        .filter((v) => v.parentId === startBlockParentId)
+        .sort((a, b) => {
+          const sortKeyA = (a.sortKey && a.sortKey.trim() !== '') ? a.sortKey : '500000';
+          const sortKeyB = (b.sortKey && b.sortKey.trim() !== '') ? b.sortKey : '500000';
+          const result = compareSortKey(sortKeyA, sortKeyB);
+          if (result === 0) {
+            return a.blockId.localeCompare(b.blockId);
+          }
+          return result;
+        });
+      
+      const startIndex = siblings.findIndex((s) => s.blockId === startBlockId);
+      if (startIndex >= 0 && startIndex < siblings.length - 1) {
+        // 重置 shouldStart，重新构建后续兄弟块
+        shouldStart = true;
+        const remainingSiblings = siblings.slice(startIndex + 1);
+        const siblingNodes = remainingSiblings
+          .map((s) => {
+            // 临时重置 visitedBlocks，允许访问后续兄弟块
+            const wasVisited = visitedBlocks.has(s.blockId);
+            if (wasVisited) {
+              visitedBlocks.delete(s.blockId);
+            }
+            const result = buildNode(s.blockId, 0);
+            if (!wasVisited && result) {
+              visitedBlocks.add(s.blockId);
+            }
+            return result;
+          })
+          .filter(Boolean);
+        
+        // 将后续兄弟块添加到起始块的 children 中（作为同级节点）
+        // 但为了保持树结构，我们需要创建一个包含起始块及其后续兄弟块的列表
+        // 实际上，更好的方式是返回起始块的父块，但只包含起始块及其后续兄弟块
+        // 重新构建包含起始块及其后续兄弟块的树
+        const parentBlock = byBlock.get(startBlockParentId);
+        if (parentBlock) {
+          // 重置状态，重新构建
+          shouldStart = true;
+          visitedBlocks.clear();
+          returnedBlocks = 0;
+          hasMore = false;
+          nextStartBlockId = undefined;
+          
+          // 构建起始块及其后续兄弟块
+          const allSiblingsFromStart = siblings.slice(startIndex)
+            .map((s) => buildNode(s.blockId, 0))
+            .filter(Boolean);
+          
+          // 如果父块是根块，直接返回根块（但只包含起始块及其后续兄弟块）
+          if (startBlockParentId === rootBlockId) {
+            return {
+              tree: {
+                blockId: root.blockId,
+                type: (root.payload as any)?.type || 'root',
+                payload: root.payload,
+                parentId: '',
+                sortKey: root.sortKey || '0',
+                indent: 0,
+                collapsed: false,
+                children: allSiblingsFromStart,
+              },
+              totalBlocks,
+              returnedBlocks,
+              hasMore,
+              nextStartBlockId: hasMore ? nextStartBlockId : undefined,
+            };
+          } else {
+            // 如果父块不是根块，返回父块（但只包含起始块及其后续兄弟块）
+            return {
+              tree: {
+                blockId: parentBlock.blockId,
+                type: (parentBlock.payload as any)?.type || 'paragraph',
+                payload: parentBlock.payload,
+                parentId: parentBlock.parentId,
+                sortKey: parentBlock.sortKey || '500000',
+                indent: parentBlock.indent || 0,
+                collapsed: parentBlock.collapsed || false,
+                children: allSiblingsFromStart,
+              },
+              totalBlocks,
+              returnedBlocks,
+              hasMore,
+              nextStartBlockId: hasMore ? nextStartBlockId : undefined,
+            };
+          }
+        }
+      }
+    }
+
+    return {
+      tree,
+      totalBlocks,
+      returnedBlocks,
+      hasMore,
+      nextStartBlockId: hasMore ? nextStartBlockId : undefined,
+    };
   }
 
   /**

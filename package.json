@@ -24,7 +24,8 @@
     "typeorm:migration:revert": "npm run typeorm -- migration:revert",
     "docs:dev": "cd docs/website && vitepress dev",
     "docs:build": "cd docs/website && vitepress build",
-    "docs:preview": "cd docs/website && vitepress preview"
+    "docs:preview": "cd docs/website && vitepress preview",
+    "batch-insert-blocks": "node scripts/batch-insert-blocks.js"
   },
   "dependencies": {
     "@nestjs/cache-manager": "^2.1.1",

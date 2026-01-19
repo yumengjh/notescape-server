@@ -28,6 +28,7 @@ import { DiffVersionsDto } from './dto/diff-versions.dto';
 import { RevertVersionDto } from './dto/revert-version.dto';
 import { SearchQueryDto } from './dto/search-query.dto';
 import { CommitVersionDto } from './dto/commit-version.dto';
+import { QueryContentDto } from './dto/query-content.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { AuditLog } from '../../common/decorators/audit-log.decorator';
@@ -87,16 +88,23 @@ export class DocumentsController {
   }
 
   @Get(':docId/content')
-  @ApiOperation({ summary: '获取文档内容（渲染树）' })
+  @ApiOperation({ summary: '获取文档内容（渲染树，支持分页）' })
   @ApiParam({ name: 'docId', description: '文档ID' })
   @ApiResponse({ status: 200, description: '获取成功' })
   @ApiResponse({ status: 404, description: '文档不存在' })
   async getContent(
     @Param('docId') docId: string,
-    @Query('version') version: number,
+    @Query() queryDto: QueryContentDto,
     @CurrentUser() user: any,
   ) {
-    return this.documentsService.getContent(docId, version, user.userId);
+    return this.documentsService.getContent(
+      docId,
+      queryDto.version,
+      user.userId,
+      queryDto.maxDepth,
+      queryDto.startBlockId,
+      queryDto.limit,
+    );
   }
 
   @Patch(':docId')

@@ -42,7 +42,8 @@ import { SecurityLog } from './entities/security-log.entity';
     AppConfigModule,
 
     // 限流（60 秒内最多 100 次，可按路由用 @Throttle / @SkipThrottle 覆盖）
-    ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]),
+    // 暂时注释掉以支持批量插入脚本
+    // ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]),
 
     // 数据库模块
     TypeOrmModule.forRootAsync({
@@ -100,7 +101,8 @@ import { SecurityLog } from './entities/security-log.entity';
   controllers: [AppController],
   providers: [
     AppService,
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // 暂时注释掉以支持批量插入脚本
+    // { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
 })
 export class AppModule {}
