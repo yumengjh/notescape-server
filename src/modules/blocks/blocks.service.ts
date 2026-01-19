@@ -133,12 +133,32 @@ export class BlocksService {
    * 更新块内容
    */
   async updateContent(blockId: string, updateBlockDto: UpdateBlockDto, userId: string) {
+    // 调试信息
+    console.log('updateContent - blockId:', blockId);
+    console.log('updateContent - blockId type:', typeof blockId);
+    
     const block = await this.blockRepository.findOne({
       where: { blockId, isDeleted: false },
     });
 
     if (!block) {
-      throw new NotFoundException('块不存在');
+      // 检查是否是软删除的块
+      const deletedBlock = await this.blockRepository.findOne({
+        where: { blockId },
+      });
+      
+      if (deletedBlock) {
+        throw new NotFoundException(`块已被删除 (blockId: ${blockId})`);
+      }
+      
+      // 检查数据库中是否存在该 blockId
+      const allBlocks = await this.blockRepository.find({
+        where: {},
+        take: 5,
+      });
+      console.log('Sample blocks in DB:', allBlocks.map(b => b.blockId));
+      
+      throw new NotFoundException(`块不存在 (blockId: ${blockId})`);
     }
 
     // 检查文档权限
@@ -164,12 +184,22 @@ export class BlocksService {
         };
       }
 
-      // 获取最新版本的结构信息
+      // 获取最新版本的结构信息（必须存在）
       const latestVersionInfo = await manager.findOne(BlockVersion, {
         where: { blockId, ver: block.latestVer },
       });
 
-      // 创建新版本
+      if (!latestVersionInfo) {
+        throw new NotFoundException('块的最新版本不存在');
+      }
+
+      // 创建新版本，保留原有的位置信息（sortKey、parentId 等）
+      // 重要：更新块内容时，sortKey 必须保持不变，否则块的位置会改变
+      // 确保 sortKey 不为空，如果为空则使用默认值
+      const preservedSortKey = (latestVersionInfo.sortKey && latestVersionInfo.sortKey.trim() !== '') 
+        ? latestVersionInfo.sortKey 
+        : '500000';
+        
       const blockVersion = manager.create(BlockVersion, {
         versionId: generateVersionId(blockId, newVer),
         docId: block.docId,
@@ -177,15 +207,17 @@ export class BlocksService {
         ver: newVer,
         createdAt: now,
         createdBy: userId,
-        parentId: latestVersionInfo?.parentId || '',
-        sortKey: latestVersionInfo?.sortKey || '0',
-        indent: latestVersionInfo?.indent || 0,
-        collapsed: latestVersionInfo?.collapsed || false,
+        parentId: latestVersionInfo.parentId, // 保留父块ID
+        sortKey: preservedSortKey, // 保留排序键，确保位置不变
+        indent: latestVersionInfo.indent, // 保留缩进
+        collapsed: latestVersionInfo.collapsed, // 保留折叠状态
         payload: updateBlockDto.payload,
         hash,
         plainText: updateBlockDto.plainText || this.extractPlainText(updateBlockDto.payload),
         refs: [],
       });
+
+      await manager.save(BlockVersion, blockVersion);
 
       await manager.save(BlockVersion, blockVersion);
 

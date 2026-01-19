@@ -15,6 +15,7 @@ import { DocSnapshot } from '../../entities/doc-snapshot.entity';
 import { WorkspacesService } from '../workspaces/workspaces.service';
 import { VersionControlService } from './services/version-control.service';
 import { generateDocId, generateBlockId, generateVersionId } from '../../common/utils/id-generator.util';
+import { compareSortKey } from '../../common/utils/sort-key.util';
 import { CreateDocumentDto } from './dto/create-document.dto';
 import { UpdateDocumentDto } from './dto/update-document.dto';
 import { MoveDocumentDto } from './dto/move-document.dto';
@@ -923,11 +924,30 @@ export class DocumentsService {
     const buildNode = (blockId: string): any => {
       const bv = byBlock.get(blockId);
       if (!bv) return null;
-      const children = versions
+      
+      // 获取所有子块并排序
+      // 注意：这里使用 versions 数组，它包含了 blockVersionMap 中指定的所有版本
+      const childVersions = versions
         .filter((v) => v.parentId === blockId)
-        .sort((a, b) => (a.sortKey || '').localeCompare(b.sortKey || ''))
+        .sort((a, b) => {
+          // 确保 sortKey 不为空，使用数字比较
+          // 如果 sortKey 为空或无效，使用默认值 '500000'（中间值）
+          const sortKeyA = (a.sortKey && a.sortKey.trim() !== '') ? a.sortKey : '500000';
+          const sortKeyB = (b.sortKey && b.sortKey.trim() !== '') ? b.sortKey : '500000';
+          const result = compareSortKey(sortKeyA, sortKeyB);
+          
+          // 如果 sortKey 相同，按 blockId 排序（确保稳定性）
+          if (result === 0) {
+            return a.blockId.localeCompare(b.blockId);
+          }
+          
+          return result;
+        });
+      
+      const children = childVersions
         .map((v) => buildNode(v.blockId))
         .filter(Boolean);
+        
       return {
         blockId: bv.blockId,
         type: (bv.payload as any)?.type || 'paragraph',
